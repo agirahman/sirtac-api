@@ -13,17 +13,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
 model User {
   id String @id @default(uuid())
   name String
   email String @unique
   password String
-  role String @default("user") //bisa "user", "admin", atau "superadmin",
+  role Role @default(USER) 
   createdAt DateTime @default(now())
-  verified Boolean @default(false)
+  isverified Boolean @default(false)
   profilepicture String?
+  verificationToken   String?
   updateAt DateTime @updatedAt
   refreshToken RefreshToken[]
+  loan Loan[]
+  review Review[]
 }
 
 model RefreshToken{
@@ -32,9 +41,55 @@ model RefreshToken{
   userId    String   @unique
   expiresAt DateTime
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+}
+
+model Book {
+    id            String   @id @default(uuid())
+  title         String
+  author        String
+  description   String?
+  publishedYear Int
+  coverImage    String?
+  fileUrl       String?
+  stock         Int@default(1)
+  rating Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  loan Loan[]
+ review Review[]
 }
 
 
+model Loan {
+  id String @id @default(uuid())
+  bookId      String 
+  userId      String
+  borrowedAt  DateTime @default(now())
+  dueDate     DateTime
+  returnedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  isOverdueNotified Boolean @default(false)
 
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, userId, returnedAt])
+}
+
+model Review {
+   id        String   @id @default(uuid())
+   userId    String
+  bookId    String
+  rating    Int      
+  comment   String?
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id])
+  book      Book     @relation(fields: [bookId], references: [id])
+
+  @@unique([userId, bookId]) 
+}
 
 

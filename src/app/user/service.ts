@@ -1,16 +1,16 @@
 import { PrismaClient } from "@prisma/client";
-import { UpdateProfileData, UserDTO } from "./dto";
+import { UpdateProfileData, UserDTO, Role } from "./dto";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { NotFoundError } from "../../error/NotFoundError";
 import { BadRequestError } from "../../error/BadRequestError";
-import nodemailer from "nodemailer";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { s3Client } from "../../utils/s3";
-
+import { uploadToS3 } from "../../utils/s3Upload";
+import {
+  generateAccessToken,
+  replaceRefreshToken,
+} from "../../utils/tokenUtils";
+import { sendVerificationEmail } from "../../utils/emailSender";
 const prisma = new PrismaClient();
-const SECRET_KEY = process.env.JWT_SECRET || "secretkey";
 
 export const registerUser = async (
   name: string,
@@ -19,67 +19,32 @@ export const registerUser = async (
   role: string
 ) => {
   const hashedPassword = await bcrypt.hash(password, 10);
+
   const user = await prisma.user.create({
-    data: {
-      name,
-      email,
-      password: hashedPassword,
-      role,
-    },
-  });
-  const token = uuidv4();
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24);
-  await prisma.refreshToken.create({
-    data: {
-      token,
-      userId: user.id,
-      expiresAt,
-    },
+    data: { name, email, password: hashedPassword, role: role as Role },
   });
 
-  // Simulasi kirim email (pakai console.log dulu)
-  const verificationLink = `http://localhost:5000/user/verify-email?token=${token}`;
-  console.log(`Verification Email Link: ${verificationLink}`);
+  const refreshToken = await generateInitialRefreshToken(user.id);
+
+  await sendVerificationEmail(email, refreshToken);
+
+  // simulasi kirim ke email verification
+  // console.log(
+  //   `Verification Email Link: http://localhost:5000/user/verify-email?token=${refreshToken}`
+  // );
 
   return user;
 };
 
 export const loginUser = async (email: string, password: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    throw new BadRequestError("Invalid Email or password");
-  }
+  if (!user) throw new BadRequestError("Invalid email or password");
 
   const isValidPassword = await bcrypt.compare(password, user.password);
-  if (!isValidPassword) {
-    throw new BadRequestError("Email atau password salah");
-  }
+  if (!isValidPassword) throw new BadRequestError("Invalid email or password");
 
-  // Generate Access Token (JWT)
-  const accessToken = jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    SECRET_KEY,
-    {
-      expiresIn: "15m", // 15 menit biar lebih aman
-    }
-  );
-
-  // Generate Refresh Token
-  const refreshToken = jwt.sign({ id: user.id }, SECRET_KEY, {
-    expiresIn: "7d", // 7 hari
-  });
-
-  // Hapus refresh token lama (jika ada)
-  await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
-
-  // Simpan refresh token baru
-  await prisma.refreshToken.create({
-    data: {
-      userId: user.id,
-      token: refreshToken,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 hari
-    },
-  });
+  const accessToken = generateAccessToken(user.id, user.email, user.role);
+  const refreshToken = await replaceRefreshToken(user.id);
 
   return {
     accessToken,
@@ -94,10 +59,6 @@ export const getUser = async () => {
 
 export const getUserById = async (id: string) => {
   return await prisma.user.findUnique({ where: { id } });
-};
-
-export const createUser = async (data: UserDTO) => {
-  return await prisma.user.create({ data });
 };
 
 export const deleteUser = async (userId: string) => {
@@ -134,6 +95,8 @@ export const requestPasswordReset = async (email: string) => {
     create: { userId: user.id, token, expiresAt },
   });
 
+  // await sendPasswordResetEmail(email, token);
+
   // Simulasi kirim email
   console.log(
     `Link reset password: http://localhost:5000/user/reset-password?token=${token}`
@@ -162,19 +125,7 @@ export const uploadProfilePicture = async (
   userId: string,
   file: Express.Multer.File
 ) => {
-  const fileExtension = file.originalname.split(".").pop();
-  const fileName = `profile-picture/${userId}-${uuidv4()}.${fileExtension}`;
-
-  const uploadParams = {
-    Bucket: process.env.AWS_S3_BUCKET_NAME!,
-    Key: fileName,
-    Body: file.buffer,
-    ContentType: file.mimetype,
-  };
-
-  await s3Client.send(new PutObjectCommand(uploadParams));
-
-  const fileUrl = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
+  const fileUrl = await uploadToS3(userId, file);
 
   await prisma.user.update({
     where: { id: userId },
@@ -188,21 +139,60 @@ export const updateProfile = async (
   userId: string,
   data: UpdateProfileData
 ) => {
-  const updateData: any = {};
+  const updateData: Partial<UpdateProfileData> = {};
 
-  if (data.name) {
-    updateData.name = data.name;
-  }
+  if (data.name) updateData.name = data.name;
 
   if (data.password) {
-    const hashedPassword = await bcrypt.hash(data.password, 10);
-    updateData.password = hashedPassword;
+    updateData.password = await bcrypt.hash(data.password, 10);
   }
 
-  const updatedUser = await prisma.user.update({
+  return await prisma.user.update({
     where: { id: userId },
     data: updateData,
   });
+};
+
+export const updateUserRole = async (
+  userId: string,
+  newRole: string,
+  currentUserId: string
+) => {
+  if (userId === currentUserId) {
+    throw new BadRequestError("You cannot change your own role");
+  }
+
+  if (!Object.values(Role).includes(newRole as Role)) {
+    throw new BadRequestError("Invalid role");
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new NotFoundError("User not found");
+
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: { role: newRole as Role },
+  });
 
   return updatedUser;
+};
+
+// helpers functions
+
+const validateRole = (role: string) => {
+  if (!Object.values(Role).includes(role as Role)) {
+    throw new BadRequestError("Invalid role");
+  }
+};
+
+const generateInitialRefreshToken = async (userId: string) => {
+  const token = uuidv4();
+  await prisma.refreshToken.create({
+    data: {
+      userId,
+      token,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    },
+  });
+  return token;
 };

@@ -1,6 +1,5 @@
 import express, { NextFunction, Request, Response } from "express";
 import * as userService from "./service";
-import { userSchema } from "./schema";
 import { NotFoundError } from "../../error/NotFoundError";
 import { BadRequestError } from "../../error/BadRequestError";
 import { authenticateJWT } from "../../middleware/auth";
@@ -93,7 +92,7 @@ router.get(
 
 router.get(
   "/",
-  authenticateJWT,
+  // authenticateJWT,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const users = await userService.getUser();
@@ -149,7 +148,7 @@ router.put(
 router.delete(
   "/:id",
   authenticateJWT,
-  authorizeRoles("superadmin"),
+  authorizeRoles("SUPERADMIN"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const deletedUser = await userService.deleteUser(String(req.params.id));
@@ -210,6 +209,38 @@ router.post(
         .status(200)
         .json({ message: "Profile picture uploaded successfully", fileUrl });
     } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  "/:id/role",
+  authenticateJWT,
+  authorizeRoles("superadmin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { role } = req.body;
+
+      if (!["user", "admin", "superadmin"].includes(role)) {
+        throw new BadRequestError("Invalid role");
+      }
+      const currentUserId = (req as any).user.id;
+      const updatedUser = await userService.updateUserRole(
+        String(req.params.id),
+        role,
+        currentUserId
+      );
+      res.status(200).json({
+        message: "User role updated successfully",
+        user: {
+          id: updatedUser.id,
+          name: updatedUser.name,
+          email: updatedUser.email,
+          role: updatedUser.role,
+        },
+      });
+    } catch (error) {
       next(error);
     }
   }

@@ -4,6 +4,9 @@ import dotenv from "dotenv";
 import { logger } from "./middleware/logger";
 import { errorHandler } from "./middleware/error";
 import userController from "./app/user/controller";
+import bookController from "./app/book/controller";
+import reviewController from "./app/review/controller";
+import "./jobs/corn";
 
 dotenv.config();
 
@@ -18,6 +21,8 @@ app.use(logger);
 // Route dasar
 // app.use("/users", userRoutes);
 app.use("/users", userController);
+app.use("/books", bookController);
+app.use("/reviews", reviewController);
 
 // middleware untuk menangani route yang tidak ditemukan
 
