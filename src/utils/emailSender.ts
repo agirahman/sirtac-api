@@ -38,7 +38,7 @@ export const sendEmail = async ({ to, subject, html }: EmailOptions) => {
 
 // Helper buat email verifikasi (bisa ditambah untuk email lain)
 export const sendVerificationEmail = async (email: string, token: string) => {
-  const verificationLink = `http://localhost:5000/user/verify-email?token=${token}`;
+  const verificationLink = `http://localhost:3000/verification-success?token=${token}`;
 
   const html = `
         <h1>Email Verification</h1>

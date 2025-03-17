@@ -24,6 +24,7 @@ model User {
   name String
   email String @unique
   password String
+  phone String @unique
   role Role @default(USER) 
   createdAt DateTime @default(now())
   isverified Boolean @default(false)

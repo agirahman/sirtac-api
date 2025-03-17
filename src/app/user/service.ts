@@ -16,12 +16,13 @@ export const registerUser = async (
   name: string,
   email: string,
   password: string,
+  phone: string,
   role: string
 ) => {
   const hashedPassword = await bcrypt.hash(password, 10);
 
   const user = await prisma.user.create({
-    data: { name, email, password: hashedPassword, role: role as Role },
+    data: { name, email, password: hashedPassword, role: role as Role, phone },
   });
 
   const refreshToken = await generateInitialRefreshToken(user.id);
@@ -36,12 +37,50 @@ export const registerUser = async (
   return user;
 };
 
+export const verifyEmail = async (token: string) => {
+  try {
+    const refreshToken = await prisma.refreshToken.findUnique({
+      where: { token },
+      include: { user: true },
+    });
+
+    if (!refreshToken) {
+      return { error: "token_not_found" };
+    }
+
+    if (refreshToken.expiresAt < new Date()) {
+      return { error: "token_expired" };
+    }
+
+    await prisma.user.update({
+      where: { id: refreshToken.userId },
+      data: { isverified: true },
+    });
+
+    const accessToken = generateAccessToken(
+      refreshToken.user.id,
+      refreshToken.user.email,
+      refreshToken.user.role
+    );
+
+    return { accessToken };
+  } catch (error) {
+    console.error("Error verifying email:", error);
+    return { error: "verification_failed" };
+  }
+};
+
 export const loginUser = async (email: string, password: string) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) throw new BadRequestError("Invalid email or password");
 
   const isValidPassword = await bcrypt.compare(password, user.password);
   if (!isValidPassword) throw new BadRequestError("Invalid email or password");
+
+  // Check if user is verified
+  if (!user.isverified) {
+    throw new BadRequestError("Please verify your email before logging in");
+  }
 
   const accessToken = generateAccessToken(user.id, user.email, user.role);
   const refreshToken = await replaceRefreshToken(user.id);

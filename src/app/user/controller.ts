@@ -14,11 +14,12 @@ router.post(
   "/register",
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, email, password, role } = req.body;
+      const { name, email, password, phone, role } = req.body;
       const newUser = await userService.registerUser(
         name,
         email,
         password,
+        phone,
         role
       );
       res.status(201).json({
@@ -27,6 +28,7 @@ router.post(
           id: newUser.id,
           name: newUser.name,
           email: newUser.email,
+          phone: newUser.phone,
           role: newUser.role,
         },
       });
@@ -242,6 +244,48 @@ router.patch(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+router.get(
+  "/verify-email",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { token } = req.query;
+
+      if (!token || typeof token !== "string") {
+        res.status(400).json({ error: "Invalid token" });
+        return;
+      }
+
+      const { accessToken, error } = await userService.verifyEmail(token);
+
+      if (error) {
+        // For API access, return JSON first
+        if (req.headers.accept?.includes("application/json")) {
+          res.status(401).json({ error });
+          return;
+        }
+        // For browser access, redirect
+        res.redirect(`http://localhost:3000/login?error=${error}`);
+        return;
+      }
+
+      // For API access
+      if (req.headers.accept?.includes("application/json")) {
+        res.json({ success: true, accessToken });
+        return;
+      }
+
+      // For browser access
+      return res.redirect(
+        `http://localhost:3000/verification-success?token=${accessToken}`
+      );
+    } catch (error) {
+      console.error("Email verification error:", error);
+      res.status(500).json({ error: "Verification failed" });
+      return;
     }
   }
 );

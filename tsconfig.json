@@ -5,6 +5,7 @@
     "module": "commonjs",
     "outDir": "./dist",
     "rootDir": "./src",
+    "moduleResolution": "node",
     "types": ["node", "express"],
     "strict": true,
     "esModuleInterop": true,

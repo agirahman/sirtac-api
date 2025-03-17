@@ -13,7 +13,8 @@ async function main() {
       name: "Super Admin",
       email: "superadmin@example.com",
       password: hashedPassword,
-      role: "SUPERADMIN", // sesuai enum di schema.prisma
+      phone: "08123456789",
+      role: "SUPERADMIN",
     },
   });
 
@@ -27,5 +28,4 @@ main()
   .catch(async (e) => {
     console.error(e);
     await prisma.$disconnect();
-    process.exit(1);
   });
