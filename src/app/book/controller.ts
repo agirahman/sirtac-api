@@ -7,7 +7,7 @@ import { authorizeRoles } from "../../middleware/roleMiddleware";
 import { NotFoundError } from "../../error/NotFoundError";
 import { upload } from "../../middleware/upload";
 import { BadRequestError } from "../../error/BadRequestError";
-import { uploadBookCoverToS3, uploadBookFileToS3 } from "../../utils/s3Upload";
+// import { uploadBookCoverToS3, uploadBookFileToS3 } from "../../utils/s3Upload";
 
 const router = Router();
 
@@ -101,8 +101,8 @@ router.post(
         throw new BadRequestError("No file uploaded");
       }
 
-      const coverUrl = await uploadBookCoverToS3(id, req.file);
-      res.json({ coverUrl });
+      // const coverUrl = await uploadBookCoverToS3(id, req.file);
+      // res.json({ coverUrl });
     } catch (error) {
       next(error);
     }
@@ -120,8 +120,8 @@ router.post(
       if (!req.file) {
         throw new BadRequestError("No file uploaded");
       }
-      const fileUrl = await uploadBookFileToS3(id, req.file);
-      res.json({ fileUrl });
+      // const fileUrl = await uploadBookFileToS3(id, req.file);
+      // res.json({ fileUrl });
     } catch (error) {}
   }
 );

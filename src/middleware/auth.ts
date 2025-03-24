@@ -13,6 +13,7 @@ declare global {
   }
 }
 
+// Versi middleware yang lebih fleksibel:
 export const authenticateJWT = async (
   req: Request,
   res: Response,
@@ -31,17 +32,7 @@ export const authenticateJWT = async (
       id: string;
       role: string;
     };
-
-    const refreshToken = await prisma.refreshToken.findUnique({
-      where: { userId: decoded.id },
-    });
-
-    if (!refreshToken) {
-      res.status(401).json({ error: "Session expired. Please login again." });
-      return;
-    }
-
-    req.user = { id: decoded.id, role: decoded.role || "user" };
+    req.user = { id: decoded.id, role: decoded.role };
     next();
   } catch (error) {
     res.status(401).json({ error: "Invalid or expired token" });

@@ -4,12 +4,18 @@ import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import { NotFoundError } from "../../error/NotFoundError";
 import { BadRequestError } from "../../error/BadRequestError";
-import { uploadToS3 } from "../../utils/s3Upload";
+import * as fs from "fs"; // Add this import
+// import { uploadToS3 } from "../../utils/s3Upload";
 import {
   generateAccessToken,
+  generateEmailVerificationToken,
   replaceRefreshToken,
+  verifyEmailVerificationToken,
 } from "../../utils/tokenUtils";
-import { sendVerificationEmail } from "../../utils/emailSender";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../../utils/emailSender";
 const prisma = new PrismaClient();
 
 export const registerUser = async (
@@ -22,51 +28,57 @@ export const registerUser = async (
   const hashedPassword = await bcrypt.hash(password, 10);
 
   const user = await prisma.user.create({
-    data: { name, email, password: hashedPassword, role: role as Role, phone },
+    data: {
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      role: role as Role,
+    },
   });
 
-  const refreshToken = await generateInitialRefreshToken(user.id);
+  const verificationToken = generateEmailVerificationToken(user.id, user.email);
 
-  await sendVerificationEmail(email, refreshToken);
+  await sendVerificationEmail(email, verificationToken);
 
-  // simulasi kirim ke email verification
-  // console.log(
-  //   `Verification Email Link: http://localhost:5000/user/verify-email?token=${refreshToken}`
-  // );
+  // Simulasi kirim email
+  console.log(
+    `Verification Email Link: http://localhost:5000/user/verify-email?token=${verificationToken}`
+  );
 
   return user;
 };
 
 export const verifyEmail = async (token: string) => {
   try {
-    const refreshToken = await prisma.refreshToken.findUnique({
-      where: { token },
-      include: { user: true },
+    const payload = verifyEmailVerificationToken(token);
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
     });
 
-    if (!refreshToken) {
-      return { error: "token_not_found" };
+    if (!user) {
+      return { error: "user_not_found" };
     }
 
-    if (refreshToken.expiresAt < new Date()) {
-      return { error: "token_expired" };
+    if (user.isverified) {
+      return { message: "User already verified" };
     }
 
     await prisma.user.update({
-      where: { id: refreshToken.userId },
+      where: { id: user.id },
       data: { isverified: true },
     });
 
-    const accessToken = generateAccessToken(
-      refreshToken.user.id,
-      refreshToken.user.email,
-      refreshToken.user.role
-    );
+    const accessToken = generateAccessToken(user.id, user.email, user.role);
 
-    return { accessToken };
+    return {
+      message: "Email verification successful",
+      accessToken,
+    };
   } catch (error) {
-    console.error("Error verifying email:", error);
-    return { error: "verification_failed" };
+    console.error("Email verification error:", error);
+    return { error: "verification_failed_or_expired" };
   }
 };
 
@@ -96,8 +108,27 @@ export const getUser = async () => {
   return await prisma.user.findMany();
 };
 
-export const getUserById = async (id: string) => {
-  return await prisma.user.findUnique({ where: { id } });
+export const getUserById = async (userId: string) => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      role: true,
+      profilePictureId: true,
+      isverified: true,
+      createdAt: true,
+      updateAt: true,
+    },
+  });
+
+  if (!user) {
+    throw new NotFoundError("User not found");
+  }
+
+  return user;
 };
 
 export const deleteUser = async (userId: string) => {
@@ -134,7 +165,7 @@ export const requestPasswordReset = async (email: string) => {
     create: { userId: user.id, token, expiresAt },
   });
 
-  // await sendPasswordResetEmail(email, token);
+  await sendPasswordResetEmail(email, token);
 
   // Simulasi kirim email
   console.log(
@@ -160,38 +191,120 @@ export const resetPassword = async (token: string, newPassword: string) => {
   await prisma.refreshToken.delete({ where: { token } });
 };
 
+/// In your service.ts file:
+
 export const uploadProfilePicture = async (
   userId: string,
   file: Express.Multer.File
-) => {
-  const fileUrl = await uploadToS3(userId, file);
+): Promise<string> => {
+  try {
+    // Validate file type
+    const allowedMimeTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+    ];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestError("Only image files are allowed");
+    }
 
-  await prisma.user.update({
-    where: { id: userId },
-    data: { profilepicture: fileUrl },
-  });
+    // Read file to buffer (if not already)
+    const fileBuffer = file.buffer || (await fs.promises.readFile(file.path));
 
-  return fileUrl;
-};
+    // First check if user already has a profile picture
+    const existingPicture = await prisma.profilePicture.findUnique({
+      where: {
+        userId: userId,
+      },
+    });
 
-export const updateProfile = async (
-  userId: string,
-  data: UpdateProfileData
-) => {
-  const updateData: Partial<UpdateProfileData> = {};
+    let picture;
 
-  if (data.name) updateData.name = data.name;
+    if (existingPicture) {
+      // If user already has a profile picture, update it
+      picture = await prisma.profilePicture.update({
+        where: {
+          userId: userId,
+        },
+        data: {
+          filename: file.originalname,
+          mimetype: file.mimetype,
+          size: file.size,
+          file: Buffer.from(fileBuffer), // Convert to Buffer explicitly
+        },
+      });
+    } else {
+      // If no existing picture, create a new one
+      picture = await prisma.profilePicture.create({
+        data: {
+          userId: userId,
+          filename: file.originalname,
+          mimetype: file.mimetype,
+          size: file.size,
+          file: Buffer.from(fileBuffer), // Convert to Buffer explicitly
+        },
+      });
+    }
 
-  if (data.password) {
-    updateData.password = await bcrypt.hash(data.password, 10);
+    // Important: Update the user's profilePictureId in the user table
+    await prisma.user.update({
+      where: { id: userId },
+      data: { profilePictureId: picture.id },
+    });
+
+    console.log(
+      `Profile picture uploaded with ID: ${picture.id} for user: ${userId}`
+    );
+
+    // Return the picture ID
+    return picture.id;
+  } catch (error) {
+    console.error("Error in uploadProfilePicture service:", error);
+    throw error;
   }
-
-  return await prisma.user.update({
-    where: { id: userId },
-    data: updateData,
-  });
 };
 
+export const getProfilePictureById = async (id: string) => {
+  try {
+    console.log(`Fetching profile picture with ID: ${id}`);
+
+    const picture = await prisma.profilePicture.findUnique({
+      where: { id },
+    });
+
+    if (!picture) {
+      console.error(`Profile picture not found with ID: ${id}`);
+      throw new NotFoundError(`Profile picture not found with ID: ${id}`);
+    }
+
+    console.log(
+      `Found profile picture: ${picture.filename}, size: ${picture.size}`
+    );
+    return picture;
+  } catch (error) {
+    console.error(`Error fetching profile picture with ID ${id}:`, error);
+    throw error;
+  }
+};
+
+// Add a utility function to get profile picture by user ID
+export const getProfilePictureByUserId = async (userId: string) => {
+  try {
+    const picture = await prisma.profilePicture.findUnique({
+      where: { userId },
+    });
+
+    if (!picture) {
+      throw new NotFoundError(`No profile picture found for user: ${userId}`);
+    }
+
+    return picture;
+  } catch (error) {
+    console.error(`Error fetching profile picture for user ${userId}:`, error);
+    throw error;
+  }
+};
 export const updateUserRole = async (
   userId: string,
   newRole: string,
@@ -216,22 +329,20 @@ export const updateUserRole = async (
   return updatedUser;
 };
 
-// helpers functions
+export const updateProfile = async (
+  userId: string,
+  data: UpdateProfileData
+) => {
+  const updateData: Partial<UpdateProfileData> = {};
 
-const validateRole = (role: string) => {
-  if (!Object.values(Role).includes(role as Role)) {
-    throw new BadRequestError("Invalid role");
+  if (data.name) updateData.name = data.name;
+
+  if (data.password) {
+    updateData.password = await bcrypt.hash(data.password, 10);
   }
-};
 
-const generateInitialRefreshToken = async (userId: string) => {
-  const token = uuidv4();
-  await prisma.refreshToken.create({
-    data: {
-      userId,
-      token,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    },
+  return await prisma.user.update({
+    where: { id: userId },
+    data: updateData,
   });
-  return token;
 };

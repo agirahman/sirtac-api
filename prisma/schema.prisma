@@ -27,13 +27,31 @@ model User {
   phone String @unique
   role Role @default(USER) 
   createdAt DateTime @default(now())
-  isverified Boolean @default(false)
-  profilepicture String?
-  verificationToken   String?
   updateAt DateTime @updatedAt
+
+  // verification
+  isverified Boolean @default(false)
+  verification VerificationToken[]
+
+    //profile picture 
+  profilePictureId String? @unique
+  profilePicture ProfilePicture?
+
+  // others
   refreshToken RefreshToken[]
   loan Loan[]
   review Review[]
+}
+
+model ProfilePicture {
+  id String @id @default(uuid())
+  userId String @unique
+  filename String
+   mimetype  String
+  size      Int
+  file      Bytes    
+  createdAt DateTime @default(now()) 
+ user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model RefreshToken{
@@ -44,6 +62,16 @@ model RefreshToken{
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
 }
+
+model VerificationToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
 
 model Book {
     id            String   @id @default(uuid())

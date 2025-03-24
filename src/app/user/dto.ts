@@ -11,6 +11,12 @@ export interface UpdateProfileData {
   phoene?: string;
 }
 
+export interface UserPayload {
+  id: string;
+  email: string;
+  role: string;
+}
+
 export enum Role {
   USER = "USER",
   ADMIN = "ADMIN",
