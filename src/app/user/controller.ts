@@ -5,13 +5,25 @@ import { BadRequestError } from "../../error/BadRequestError";
 import { authenticateJWT } from "../../middleware/auth";
 import { UnauthorizedError } from "../../error/UnauthorizedError";
 import { authorizeRoles } from "../../middleware/roleMiddleware";
-// import { upload } from "../../middleware/upload";
 import multer from "multer";
-import { UpdateProfileData, UserPayload } from "./dto";
-// import { uploadProfilePictureToDB } from "../../utils/s3Upload";
+import { ContactFormRequest, UpdateProfileData, UserPayload } from "./dto";
 
 const router = express.Router();
-const upload = multer();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB file size limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only image files
+    const allowedMimeTypes = ["image/jpeg", "image/png", "image/gif"];
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type. Only JPEG, PNG, and GIF are allowed."));
+    }
+  },
+});
 
 router.post(
   "/register",
@@ -139,10 +151,47 @@ router.get(
   }
 );
 
+router.post(
+  "/contact",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { name, email, message } = req.body as ContactFormRequest;
+
+      // Validate required fields
+      if (!name || !email || !message) {
+        res.status(400).json({
+          message: "Name, email, and comment are required fields",
+        });
+        return;
+      }
+
+      // Check if recipient email is configured
+      const recipientEmail = process.env.SMTP_FROM || "admin@example.com";
+      if (!recipientEmail) {
+        res.status(500).json({
+          error: "Recipient email is not configured",
+        });
+        return;
+      }
+
+      // Process the contact form submission
+      await userService.processContactForm({ name, email, message });
+
+      // Return success response
+      res.status(200).json({
+        message: "Your message has been sent successfully!",
+      });
+      return;
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.get(
   "/admin-dashboard",
   authenticateJWT,
-  authorizeRoles("admin"),
+  authorizeRoles("ADMIN", "SUPERADMIN"),
   (req: Request, res: Response, next: NextFunction) => {
     try {
       res.json({ message: "Welcome to admin dashboard!" });
@@ -184,8 +233,9 @@ router.put(
   authenticateJWT,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Get user ID from JWT token
+      // Get user ID and role from JWT token
       const userId = req.user?.id;
+      const userRole = req.user?.role;
 
       // If user ID from token is missing, return unauthorized
       if (!userId) {
@@ -193,28 +243,30 @@ router.put(
         return;
       }
 
-      // Check if user is updating their own profile (important security check)
-      if (userId !== req.params.id) {
+      // Allow SUPERADMINs to edit any profile, but other users can only edit their own
+      if (userRole !== "SUPERADMIN" && userId !== req.params.id) {
         res.status(403).json({ error: "You can only update your own profile" });
         return;
       }
 
       // Extract only the fields we want to update
-      const { name, password } = req.body as UpdateProfileData;
+      const { name, password, phone } = req.body as UpdateProfileData;
 
       // Validate input data
       if (
         (name !== undefined && name.trim() === "") ||
-        (password !== undefined && password.trim() === "")
+        (password !== undefined && password.trim() === "") ||
+        (phone !== undefined && phone.trim() === "")
       ) {
         res.status(400).json({ error: "Invalid input data" });
         return;
       }
 
-      // Update the user profile
-      const updatedUser = await userService.updateProfile(userId, {
+      // Update the user profile (use req.params.id - the target user - not userId which is the logged-in user)
+      const updatedUser = await userService.updateProfile(req.params.id, {
         name,
         password,
+        phone,
       });
 
       // Return success response
@@ -224,7 +276,7 @@ router.put(
           id: updatedUser.id,
           name: updatedUser.name,
           email: updatedUser.email,
-          phone: updatedUser.phone, // Include phone in response
+          phone: updatedUser.phone,
           role: updatedUser.role,
           profilepicture: updatedUser.profilePictureId,
         },
@@ -299,18 +351,23 @@ router.post(
         return;
       }
 
-      // Add logging to debug upload issues
-      console.log(
-        `Received file upload request: ${file.originalname}, size: ${file.size}, mimetype: ${file.mimetype} for user: ${userId}`
-      );
+      // Log file details for debugging
+      console.log(`Received file upload: 
+        - Original Name: ${file.originalname}
+        - Size: ${file.size} bytes
+        - MIME Type: ${file.mimetype}`);
 
-      // Upload the file and get the fileId
-      const fileId = await userService.uploadProfilePicture(userId, file);
+      // Upload the file buffer and get the fileId
+      const fileId = await userService.uploadProfilePicture(userId, {
+        buffer: file.buffer,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+      });
 
-      // Return consistent response with fileId
+      // Return success response with fileId
       res.status(201).json({
         message: "Profile picture uploaded successfully",
-        fileId: fileId, // Use fileId consistently
+        fileId: fileId,
       });
     } catch (error) {
       console.error("Profile picture upload error:", error);
@@ -325,17 +382,23 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-
-      console.log(`Received request for profile picture: ${id}`);
-
-      // Get the user ID from the token
       const userId = (req.user as UserPayload).id;
-      console.log(
-        `Authenticated user ${userId} requesting profile picture ${id}`
-      );
+
+      console.log(`Fetching profile picture: ${id} for user: ${userId}`);
 
       // Fetch the picture
       const picture = await userService.getProfilePictureById(id);
+
+      // Validate access (optional: add more granular access control if needed)
+      if (picture.userId !== userId) {
+        res
+          .status(403)
+          .json({ message: "Unauthorized to access this profile picture" });
+        return;
+      }
+
+      // IMPORTANT: Convert Bytes to Buffer if needed
+      const imageBuffer = Buffer.from(picture.file);
 
       // Set appropriate headers
       res.setHeader("Content-Type", picture.mimetype);
@@ -345,7 +408,7 @@ router.get(
       );
 
       // Send the file data
-      res.send(picture.file);
+      res.send(imageBuffer);
     } catch (error) {
       console.error(`Error serving profile picture:`, error);
       next(error);
@@ -356,20 +419,33 @@ router.get(
 router.patch(
   "/:id/role",
   authenticateJWT,
-  authorizeRoles("superadmin"),
+  authorizeRoles("SUPERADMIN"), // Changed to uppercase to match frontend
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { role } = req.body;
 
-      if (!["user", "admin", "superadmin"].includes(role)) {
+      // Case-insensitive role validation
+      const validRoles = ["user", "admin", "superadmin"].map((r) =>
+        r.toLowerCase()
+      );
+
+      if (!validRoles.includes(role.toLowerCase())) {
         throw new BadRequestError("Invalid role");
       }
-      const currentUserId = (req as any).user.id;
+
+      const currentUserId = req.user?.id;
+
+      if (!currentUserId) {
+        throw new UnauthorizedError("User ID not found in token");
+      }
+
+      // Role is converted to proper case in the service layer
       const updatedUser = await userService.updateUserRole(
         String(req.params.id),
         role,
         currentUserId
       );
+
       res.status(200).json({
         message: "User role updated successfully",
         user: {

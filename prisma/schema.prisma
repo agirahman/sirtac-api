@@ -47,10 +47,11 @@ model ProfilePicture {
   id String @id @default(uuid())
   userId String @unique
   filename String
-   mimetype  String
+  mimetype  String
   size      Int
   file      Bytes    
-  createdAt DateTime @default(now()) 
+createdAt DateTime @default(now()) 
+  uploadedAt DateTime @default(now())
  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -77,6 +78,7 @@ model Book {
     id            String   @id @default(uuid())
   title         String
   author        String
+  publisher     String
   description   String?
   publishedYear Int
   coverImage    String?

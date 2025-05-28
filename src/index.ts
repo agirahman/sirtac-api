@@ -6,6 +6,7 @@ import { errorHandler } from "./middleware/error";
 import userController from "./app/user/controller";
 import bookController from "./app/book/controller";
 import reviewController from "./app/review/controller";
+import path from "path";
 import "./jobs/corn";
 
 dotenv.config();
@@ -22,6 +23,8 @@ app.use(
 );
 app.use(express.json());
 app.use(logger);
+app.use("/uploads", express.static("uploads"));
+
 // app.use(authenticateJWT);
 // Route dasar
 // app.use("/users", userRoutes);

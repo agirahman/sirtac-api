@@ -6,6 +6,7 @@ import { authorizeRoles } from "../../middleware/roleMiddleware";
 
 const router = Router();
 
+// Get all reviews
 router.get(
   "/",
   authenticateJWT,
@@ -19,6 +20,7 @@ router.get(
   }
 );
 
+// Add review for a specific book
 router.post(
   "/:bookId",
   authenticateJWT,
@@ -41,8 +43,9 @@ router.post(
   }
 );
 
+// Get reviews for a specific book - FIXED THE TYPO HERE
 router.get(
-  "/:bookdId",
+  "/:bookId", // Changed from "/:bookdId" to "/:bookId"
   authenticateJWT,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -55,6 +58,7 @@ router.get(
   }
 );
 
+// Delete a review
 router.delete(
   "/:reviewId",
   authenticateJWT,

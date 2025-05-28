@@ -1,29 +1,104 @@
-import { PrismaClient } from "@prisma/client";
-import { BookDTO, UpdateBookDTO } from "./dto";
+import { PrismaClient, Book, Loan } from "@prisma/client";
 import { ConflictError } from "../../error/ConflictError";
 import { NotFoundError } from "../../error/NotFoundError";
 import { sendEmail } from "../../utils/emailSender";
+import fs from "fs";
+import path from "path";
 
 const prisma = new PrismaClient();
 const MAX_LOANS = 5;
 
-export const createBook = async (data: BookDTO) => {
-  return await prisma.book.create({ data });
+// Define interfaces for the input data
+interface BookCreateInput {
+  title: string;
+  author: string;
+  publisher: string;
+  description?: string;
+  publishedYear: number;
+  coverImage?: string;
+  fileUrl?: string;
+  stock?: number;
+}
+
+interface BookUpdateInput {
+  title?: string;
+  author?: string;
+  publisher?: string;
+  description?: string;
+  coverImage?: string;
+  fileUrl?: string;
+  stock?: number;
+  publishedYear?: number;
+}
+
+// CREATE book function - uncommented and implemented
+export const createBook = async (data: BookCreateInput): Promise<Book> => {
+  const bookData = {
+    ...data,
+    stock: data.stock || 1, // Default stock to 1 if not provided
+  };
+
+  return await prisma.book.create({ data: bookData });
 };
 
-export const getAllBooks = async () => {
-  return await prisma.book.findMany();
+export const getAllBooks = async (): Promise<Book[]> => {
+  return await prisma.book.findMany({
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
 };
 
-export const getBookById = async (id: string) => {
+export const getBookById = async (id: string): Promise<Book | null> => {
   return await prisma.book.findUnique({ where: { id } });
 };
 
-export const updateBook = async (id: string, data: UpdateBookDTO) => {
+export const updateBook = async (
+  id: string,
+  data: BookUpdateInput
+): Promise<Book> => {
+  // Check if book exists
+  const book = await prisma.book.findUnique({ where: { id } });
+
+  if (!book) {
+    throw new NotFoundError("Book not found");
+  }
+
   return await prisma.book.update({ where: { id }, data });
 };
 
-export const deleteBook = async (id: string) => {
+export const deleteBook = async (id: string): Promise<Book> => {
+  const book = await prisma.book.findUnique({ where: { id } });
+
+  if (!book) {
+    throw new NotFoundError("Book not found");
+  }
+
+  // Delete associated files if they exist
+  if (book.coverImage) {
+    const coverPath = path.join(process.cwd(), book.coverImage);
+    if (fs.existsSync(coverPath)) {
+      try {
+        fs.unlinkSync(coverPath);
+        console.log(`Deleted cover file: ${coverPath}`);
+      } catch (error) {
+        console.error(`Error deleting cover file: ${coverPath}`, error);
+      }
+    }
+  }
+
+  if (book.fileUrl) {
+    const filePath = path.join(process.cwd(), book.fileUrl);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`Deleted book file: ${filePath}`);
+      } catch (error) {
+        console.error(`Error deleting book file: ${filePath}`, error);
+      }
+    }
+  }
+
   return await prisma.book.delete({ where: { id } });
 };
 
@@ -31,7 +106,7 @@ export const borrowBook = async (
   userId: string,
   bookId: string,
   dueDate: Date
-) => {
+): Promise<Loan> => {
   const book = await prisma.book.findUnique({ where: { id: bookId } });
 
   if (!book) {
@@ -57,7 +132,7 @@ export const borrowBook = async (
 
   const existingLoan = await prisma.loan.findFirst({
     where: {
-      id: bookId,
+      bookId,
       userId,
       returnedAt: null,
     },
@@ -83,7 +158,12 @@ export const borrowBook = async (
   return loan;
 };
 
-export const getUserLoans = async (userId: string) => {
+// Define the type for loan with included book
+interface LoanWithBook extends Loan {
+  book: Book | null;
+}
+
+export const getUserLoans = async (userId: string): Promise<LoanWithBook[]> => {
   try {
     const loans = await prisma.loan.findMany({
       where: { userId },
@@ -103,7 +183,10 @@ export const getUserLoans = async (userId: string) => {
   }
 };
 
-export const returnBook = async (userId: string, bookId: string) => {
+export const returnBook = async (
+  userId: string,
+  bookId: string
+): Promise<Loan> => {
   const loan = await prisma.loan.findFirst({
     where: {
       bookId,
@@ -133,8 +216,18 @@ export const returnBook = async (userId: string, bookId: string) => {
   return updatedLoan;
 };
 
-export const checkOverdueLoans = async () => {
-  const overdueLoans = await prisma.loan.findMany({
+// Define the interface for loans with related entities
+interface OverdueLoan extends Loan {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  book: Book;
+}
+
+export const checkOverdueLoans = async (): Promise<void> => {
+  const overdueLoans = (await prisma.loan.findMany({
     where: {
       dueDate: {
         lt: new Date(),
@@ -146,7 +239,7 @@ export const checkOverdueLoans = async () => {
       user: true,
       book: true,
     },
-  });
+  })) as OverdueLoan[];
 
   for (const loan of overdueLoans) {
     const { user, book } = loan;

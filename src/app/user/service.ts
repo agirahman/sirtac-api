@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { UpdateProfileData, UserDTO, Role } from "./dto";
+import { UpdateProfileData, Role, FileUpload, ContactFormRequest } from "./dto";
 import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import { NotFoundError } from "../../error/NotFoundError";
@@ -13,6 +13,7 @@ import {
   verifyEmailVerificationToken,
 } from "../../utils/tokenUtils";
 import {
+  sendContactFormEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../../utils/emailSender";
@@ -104,6 +105,15 @@ export const loginUser = async (email: string, password: string) => {
   };
 };
 
+export const processContactForm = async (
+  formData: ContactFormRequest
+): Promise<void> => {
+  const { name, email, message } = formData;
+  const recipientEmail = process.env.SMTP_FROM || "admin@example.com";
+
+  await sendContactFormEmail(recipientEmail, name, email, message);
+};
+
 export const getUser = async () => {
   return await prisma.user.findMany();
 };
@@ -193,101 +203,51 @@ export const resetPassword = async (token: string, newPassword: string) => {
 
 /// In your service.ts file:
 
-export const uploadProfilePicture = async (
-  userId: string,
-  file: Express.Multer.File
-): Promise<string> => {
+export async function uploadProfilePicture(userId: string, file: FileUpload) {
   try {
-    // Validate file type
-    const allowedMimeTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/gif",
-      "image/webp",
-    ];
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestError("Only image files are allowed");
-    }
-
-    // Read file to buffer (if not already)
-    const fileBuffer = file.buffer || (await fs.promises.readFile(file.path));
-
-    // First check if user already has a profile picture
-    const existingPicture = await prisma.profilePicture.findUnique({
-      where: {
+    // Create a new profile picture record in the database
+    const profilePicture = await prisma.profilePicture.create({
+      data: {
         userId: userId,
+        filename: file.originalname,
+        mimetype: file.mimetype,
+        file: Buffer.from(file.buffer), // Ensure it's a Buffer
+        size: file.buffer.length,
+        uploadedAt: new Date(),
       },
     });
 
-    let picture;
-
-    if (existingPicture) {
-      // If user already has a profile picture, update it
-      picture = await prisma.profilePicture.update({
-        where: {
-          userId: userId,
-        },
-        data: {
-          filename: file.originalname,
-          mimetype: file.mimetype,
-          size: file.size,
-          file: Buffer.from(fileBuffer), // Convert to Buffer explicitly
-        },
-      });
-    } else {
-      // If no existing picture, create a new one
-      picture = await prisma.profilePicture.create({
-        data: {
-          userId: userId,
-          filename: file.originalname,
-          mimetype: file.mimetype,
-          size: file.size,
-          file: Buffer.from(fileBuffer), // Convert to Buffer explicitly
-        },
-      });
-    }
-
-    // Important: Update the user's profilePictureId in the user table
+    // Update user's profile picture reference
     await prisma.user.update({
       where: { id: userId },
-      data: { profilePictureId: picture.id },
+      data: { profilePictureId: profilePicture.id },
     });
 
-    console.log(
-      `Profile picture uploaded with ID: ${picture.id} for user: ${userId}`
-    );
-
-    // Return the picture ID
-    return picture.id;
+    return profilePicture.id;
   } catch (error) {
-    console.error("Error in uploadProfilePicture service:", error);
+    console.error("Error uploading profile picture:", error);
     throw error;
   }
-};
+}
 
-export const getProfilePictureById = async (id: string) => {
-  try {
-    console.log(`Fetching profile picture with ID: ${id}`);
+export async function getProfilePictureById(pictureId: string) {
+  const picture = await prisma.profilePicture.findUnique({
+    where: { id: pictureId },
+    select: {
+      id: true,
+      userId: true,
+      filename: true,
+      mimetype: true,
+      file: true,
+    },
+  });
 
-    const picture = await prisma.profilePicture.findUnique({
-      where: { id },
-    });
-
-    if (!picture) {
-      console.error(`Profile picture not found with ID: ${id}`);
-      throw new NotFoundError(`Profile picture not found with ID: ${id}`);
-    }
-
-    console.log(
-      `Found profile picture: ${picture.filename}, size: ${picture.size}`
-    );
-    return picture;
-  } catch (error) {
-    console.error(`Error fetching profile picture with ID ${id}:`, error);
-    throw error;
+  if (!picture) {
+    throw new Error("Profile picture not found");
   }
-};
 
+  return picture;
+}
 // Add a utility function to get profile picture by user ID
 export const getProfilePictureByUserId = async (userId: string) => {
   try {
@@ -314,8 +274,12 @@ export const updateUserRole = async (
     throw new BadRequestError("You cannot change your own role");
   }
 
-  if (!Object.values(Role).includes(newRole as Role)) {
-    throw new BadRequestError("Invalid role");
+  // Normalize role to uppercase for consistent storage
+  const normalizedRole = newRole.toUpperCase();
+
+  // Check if the normalized role is valid
+  if (!Object.values(Role).includes(normalizedRole as Role)) {
+    throw new BadRequestError(`Invalid role: ${newRole}`);
   }
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -323,7 +287,7 @@ export const updateUserRole = async (
 
   const updatedUser = await prisma.user.update({
     where: { id: userId },
-    data: { role: newRole as Role },
+    data: { role: normalizedRole as Role },
   });
 
   return updatedUser;
@@ -336,7 +300,7 @@ export const updateProfile = async (
   const updateData: Partial<UpdateProfileData> = {};
 
   if (data.name) updateData.name = data.name;
-
+  if (data.phone) updateData.phone = data.phone; // Added phone update
   if (data.password) {
     updateData.password = await bcrypt.hash(data.password, 10);
   }
