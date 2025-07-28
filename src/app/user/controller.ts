@@ -461,4 +461,18 @@ router.patch(
   }
 );
 
+// user controller
+router.get(
+  "/contact",
+  // authenticateJWT,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const messages = await userService.getContactMessage();
+      res.status(200).json(messages);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export default router;

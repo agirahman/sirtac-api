@@ -49,6 +49,21 @@ export const getAllBooks = async (): Promise<Book[]> => {
   });
 };
 
+export const searchBooks = async (query: string): Promise<Book[]> => {
+  return await prisma.book.findMany({
+    where: {
+      OR: [
+        {title: { contains: query, mode: "insensitive" }},
+        {author: { contains: query, mode: "insensitive" }},
+        {publisher: { contains: query, mode: "insensitive" }},
+      ]
+    },
+    orderBy: {
+      createdAt: "desc"
+    }
+  })
+}
+
 export const getBookById = async (id: string): Promise<Book | null> => {
   return await prisma.book.findUnique({ where: { id } });
 };

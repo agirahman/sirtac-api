@@ -231,7 +231,13 @@ router.get(
   authenticateJWT,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const books = await bookService.getAllBooks();
+      const keyword = req.query.keyword as string | undefined;
+      let books
+      if (keyword && keyword.trim() !== "") {
+        books = await bookService.searchBooks(keyword.trim())
+      } else {
+        books = await bookService.getAllBooks();
+      }
       res.json(books);
     } catch (error) {
       next(error);

@@ -111,6 +111,15 @@ export const processContactForm = async (
   const { name, email, message } = formData;
   const recipientEmail = process.env.SMTP_FROM || "admin@example.com";
 
+  // Simpan data kontak ke database
+  await prisma.contactMessage.create({
+    data: {
+      name,
+      email,
+      message,
+    },
+  });
+
   await sendContactFormEmail(recipientEmail, name, email, message);
 };
 
@@ -310,3 +319,8 @@ export const updateProfile = async (
     data: updateData,
   });
 };
+// user service
+export const getContactMessage = async () => {
+  return await prisma.contactMessage.findMany();
+}
+
